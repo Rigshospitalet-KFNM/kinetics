@@ -1,0 +1,3 @@
+[submodule "kinetic/tpcclib"]
+	path = kinetic/tpcclib
+	url = https://gitlab.utu.fi/vesoik/tpcclib.git
