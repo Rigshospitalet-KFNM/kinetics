@@ -1,21 +1,30 @@
 # Python Standard Library
 from logging import DEBUG
 from pathlib import Path
+import threading
 import os
-import argparse
+import signal
+import tqdm
+import inspect
 
 # Third party imports
 from pydicom import read_file
+from rt_utils import RTStruct
 from pydicom.uid import CTImageStorage
 from totalsegmentator.python_api import totalsegmentator
 
 # Dicomnode imports 
+from dicomnode.dicom.dimse import Address
 from dicomnode.server.pipeline_tree import InputContainer
 from dicomnode.server.output import PipelineOutput
 from dicomnode.server.grinders import IdentityGrinder
 from dicomnode.server.nodes import AbstractQueuedPipeline
 from dicomnode.server.input import AbstractInput
-from dicomnode.server.output import NoOutput
+from dicomnode.server.output import DicomOutput, NoOutput
+
+# God fucking dammit
+tqdm.tqdm.monitor_interval = 0
+
 
 # Constants Setup
 INPUT_KEY = "CT_IMAGES"
@@ -24,18 +33,18 @@ INPUT_KEY = "CT_IMAGES"
 # Environment setup
 ENV_NAME_NODE_PATH = "TOTAL_SEGMENTATOR_PATH"
 node_path = Path(os.environ.get(ENV_NAME_NODE_PATH, os.getcwd() + "/total_segmentator_node"))
+output_path = Path(os.getcwd()) / "outputs"
 
 
-parser = argparse.ArgumentParser("Total segmentator pipeline, sets up a dicomnode for CT segmentation.",
-                                 epilog="""Total segmentator is written by Jakob Wasserthal and is not intended for clinical usage
-Please cite total segmentator at: https://pubs.rsna.org/doi/10.1148/ryai.230024""")
+print("PID: ",os.getpid())
 
-# Positional Arguments
-parser.add_argument('--dry-run', action='store_true', default=False, help="Executes this script without opening a server")
-#
+def SIGUSR1_handler(signum, frane):
+  for thread in threading.enumerate():
+    print(thread._target)
+    if thread._target is not None:
+      print(inspect.getsourcelines(thread._target))
 
-args = parser.parse_args()
-
+signal.signal(signal.SIGUSR1, SIGUSR1_handler)
 
 class TotalSegmentatorInput(AbstractInput):
   image_grinder = IdentityGrinder()
@@ -59,36 +68,43 @@ class TotalSegmentatorInput(AbstractInput):
 
     return True
 
+destination_address = Address('10.146.12.194',11112, "KINETICDIAMOX")
+
 
 class TotalSegmentatorPipeline(AbstractQueuedPipeline):
   input = {
     INPUT_KEY : TotalSegmentatorInput
   }
 
-  ae_title = "TOTAL_SEG"
+  ae_title = "TOTALSEG"
   data_directory = node_path
-  port = 11112
-  log_level = DEBUG
+  port = 11113
 
   def process(self, input_data: InputContainer) -> PipelineOutput:
     if input_data.paths is None:
       raise Exception("This can never happen!")
 
     input_path = input_data.paths[INPUT_KEY]
-    output_path = input_path.parent / "output"
+    #output_path = input_path.parent / "output"
 
-    totalsegmentator(input_path, output_path, output_type="dicom", device="gpu", quiet=True)
+    totalsegmentator(input_path, 
+                     output_path, 
+                     output_type="dicom", 
+                     device="gpu", 
+                     quiet=True,
+                     body_seg=True,
+                     ml=True,
+    )
 
     output_file = output_path / "segmentations.dcm"
 
-    print(read_file(output_file))
+    rt_struct_ds = read_file(output_file)
 
-    return NoOutput()
+    rt_struct = RTStruct(input_data.datasets, rt_struct_ds)
+
+    return NoOutput() #DicomOutput([()], self.ae_title)
 
 
 if __name__ == "__main__":
-  if not args.dry_run:
-    pipeline = TotalSegmentatorPipeline()
-    pipeline.open()
-  else:
-    print("Not running")
+  pipeline = TotalSegmentatorPipeline()
+  pipeline.open()

@@ -9,3 +9,5 @@ data/
 
 rhkinetics/
 tpcclib/
+total_segmentator_node/
+outputs/
