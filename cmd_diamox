@@ -1,0 +1,16 @@
+cmd: ptts diamox
+cmd: series [patientID]
+
+REPEAT x4 (hvile x 2, diamox x 2)
+
+/raid/scripts/run_totalsegmentator2 [seriesUID->CT]
+process -m 1cmp -r brain -p [nslices (5)] [seriesUID]
+nii2dcm -p 1cmp_brain_K1 -r brain -s [seriesdescription] -z 2
+store2syngovia -s via3 [path2dcmfiles]
+
+RAPPORT:
+hvile 1 + 2 registreres til hinanden (tilsvarende med diamox)
+hvile og diamox flyttes til standard space (MNI space)
+hvile og diamox registreres til atlas vaskulære territorier 
+
+

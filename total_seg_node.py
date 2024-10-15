@@ -13,7 +13,7 @@ from rt_utils import RTStruct
 from pydicom.uid import CTImageStorage
 from totalsegmentator.python_api import totalsegmentator
 
-# Dicomnode imports 
+# Dicomnode imports
 from dicomnode.dicom.dimse import Address
 from dicomnode.server.pipeline_tree import InputContainer
 from dicomnode.server.output import PipelineOutput
@@ -29,14 +29,10 @@ tqdm.tqdm.monitor_interval = 0
 # Constants Setup
 INPUT_KEY = "CT_IMAGES"
 
-
 # Environment setup
 ENV_NAME_NODE_PATH = "TOTAL_SEGMENTATOR_PATH"
 node_path = Path(os.environ.get(ENV_NAME_NODE_PATH, os.getcwd() + "/total_segmentator_node"))
 output_path = Path(os.getcwd()) / "outputs"
-
-
-print("PID: ",os.getpid())
 
 def SIGUSR1_handler(signum, frane):
   for thread in threading.enumerate():
@@ -68,7 +64,7 @@ class TotalSegmentatorInput(AbstractInput):
 
     return True
 
-destination_address = Address('10.146.12.194',11112, "KINETICDIAMOX")
+destination_address = Address('10.146.12.194', 11112, "KINETICDIAMOX")
 
 
 class TotalSegmentatorPipeline(AbstractQueuedPipeline):
@@ -87,22 +83,18 @@ class TotalSegmentatorPipeline(AbstractQueuedPipeline):
     input_path = input_data.paths[INPUT_KEY]
     #output_path = input_path.parent / "output"
 
-    totalsegmentator(input_path, 
-                     output_path, 
-                     output_type="dicom", 
-                     device="gpu", 
+    totalsegmentator(input_path,
+                     output_path,
+                     output_type="dicom",
+                     device="gpu",
                      quiet=True,
                      body_seg=True,
                      ml=True,
     )
 
-    output_file = output_path / "segmentations.dcm"
-
-    rt_struct_ds = read_file(output_file)
-
-    rt_struct = RTStruct(input_data.datasets, rt_struct_ds)
-
-    return NoOutput() #DicomOutput([()], self.ae_title)
+    output_dataset = read_file(output_path / "segmentations.dcm")
+    return NoOutput()
+    #return DicomOutput([(destination_address, output_dataset)],self.ae_title)
 
 
 if __name__ == "__main__":

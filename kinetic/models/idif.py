@@ -6,7 +6,7 @@ class ImageDerivedInputFunction:
     pass
 
 ###
-# 
+#
 # #!/usr/bin/python
 
 import os
@@ -207,7 +207,6 @@ def main():
     # Get time info from header
     FrameTimesStart = np.array(hdr_pet['FrameTimesStart'])
     FrameDuration = np.array(hdr_pet['FrameDuration'])
-    MidFrameTime = FrameTimesStart + FrameDuration/2.0
 
     # Create SUV from 5 to 40 seconds
     print(f"Create SUV map. TotalDose: {hdr_pet['RadionuclideInjectedDose']/1e6} MBq, PatientWeight: {hdr_pet['PatientWeight']} kg")
@@ -221,20 +220,6 @@ def main():
     SUV_median = np.median(SUV[aortamask])
     print(f'Median SUV inside Aorta Mask: {SUV_median}')
 
-    # Create figure of SUV overlayed with aorta VOI
-    fig, ax = plt.subplots(1,2, constrained_layout=True)
-    # Sag
-    ax[0].imshow(np.transpose(np.max(SUV[::-1,:,:],axis=1), (1, 0)), vmin=0, vmax=2*SUV_median, cmap='gray_r',
-        aspect=hdr_pet['SliceThickness']/hdr_pet['PixelSpacing'][1])
-    plotting.plot_outlines(np.transpose(np.max(aortamask[::-1,:,:],axis=1), (1, 0)).T, ax=ax[0], lw=0.5, color='r')
-    ax[0].axis('off')
-    # Cor
-    ax[1].imshow(np.transpose(np.max(SUV,axis=0), (1, 0)), vmin=0, vmax=SUV_median*2, cmap='gray_r',
-        aspect=hdr_label['SliceThickness']/hdr_label['PixelSpacing'][0])
-    plotting.plot_outlines(np.transpose(np.max(aortamask,axis=0), (1, 0)).T, ax=ax[1], lw=0.5, color='r')
-    ax[1].axis('off')
-    plt.suptitle('Aorta Segmentation')
-    plt.savefig(os.path.join(args.outdir,'segmentation.pdf'))
 
     # Threshold aortamask with median(SUV)/1.5
     aortamask = aortamask*np.int8(SUV>SUV_median/1.5)
@@ -313,18 +298,6 @@ def main():
     xmin = xmid-xsize//2
     ymin = ymid-ysize//2
 
-    M = pet.montage(aortamask_segmented[xmin:xmin+xsize,ymin:ymin+ysize,zmin:zmin+zsize])
-    plotting.imshow(M,vmin=0,vmax=4,cmap='viridis',outfile=os.path.join(args.outdir,'aorta.pdf'))
-
-    # if hdr_label['dimlabel'][-2::] == 'si':
-    #     slices = range(slices_nonzero[0],slices_nonzero[-1]+1)
-    # else:
-    #     # Flip slices
-    #     slices = range((slices_nonzero[-1]-nslices)*-1,-1*(slices_nonzero[0]-nslices)+1)
-
-    # Create plot for evalutating aorta mask position on SUV PET
-    plotting.ortoshow(SUV,overlay=aortamask_segmented, cmap='tab20', vmin=0, vmax=20, voxdim=voxdim, mip=True, outfile=os.path.join(args.outdir,'mask_orto.pdf'))
-
     ### Create VOI inside aorta arch of approx 1 mL ###
     thr = 1000//np.prod(voxdim)
 
@@ -335,6 +308,10 @@ def main():
     print('Looping over each segment')
     N = int(np.round((1000/(np.prod(voxdim)*3*3))/2)*2)
     print(f"Length of VOI: {N} slices")
+
+
+
+
     for seg in range(4):
         if seg in [0,2,3]:
             # Create slice profile in z-direction
@@ -399,44 +376,8 @@ def main():
         #    nib.save(nifti, niftifile)
 
         # Save VOI as numpy array
-        voifile = os.path.join(args.outdir,'VOI.npy')
         #np.save(voifile,VOI)
 
         # Write IDIF to file
         #pet.tacwrite(FrameTimesStart,FrameDuration,idif[:,seg],'Bq/cc',os.path.join(args.outdir,'QUADRA_segment-'+str(seg+1)+'_IDIF.tac'),['idif'])
         pet.tacwrite(FrameTimesStart,FrameDuration,idif[:,seg],'Bq/cc',os.path.join(args.outdir,'IDIF_'+method.lower()+'_segment-'+str(seg+1)+'.tac'),['idif'])
-
-    # Create plot for evalutating aorta mask position on SUV PET
-    plotting.ortoshow(SUV,overlay=VOI[...,0]+(VOI[...,1]*2)+(VOI[...,2]*3)+(VOI[...,3]*4), vmin=0, vmax=20, cmap='tab20', voxdim=voxdim, mip=True, outfile=os.path.join(args.outdir,'QUADRA_VOI_orto.pdf'))
-    print(os.path.join(args.outdir,'QUADRA_VOI_orto.pdf'))
-
-    # Save a tsv file with IDIF stats
-    tsvfilename = os.path.join(args.outdir,method.lower()+'_IDIF.tsv')
-    # Headers
-    fieldnames = ['Method','Radiopharmaceutical','PatientWeight','RadionuclideTotalDose','Segment','Region','Unit','AUC40','Peak','Slope']
-    with open(tsvfilename,'w') as tsvfile:
-        # Create csv writer with tab delimiter
-        writer = csv.writer(tsvfile, delimiter='\t')
-
-        # Write header row
-        writer.writerow(fieldnames)
-
-        for seg in range(4):
-        	# Calculate metrics in native units (typical Bq/ml)
-            auc_bq = np.trapz(idif[suvframes,seg], x=MidFrameTime[suvframes])
-            peak_bq = np.amax(idif[:,seg])# Peak value is found within the entire duration
-            slope_bq = np.amax(np.diff(idif[suvframes,seg]))
-
-            writer.writerow([method,hdr_pet['Radiopharmaceutical'],hdr_pet['PatientWeight'],hdr_pet['RadionuclideTotalDose'],seg+1,segments[seg],hdr_pet['Unit'],auc_bq,peak_bq,slope_bq])
-
-            # Calculate metrics in SUV units
-            idif_suv = idif[:,seg] * hdr_pet['PatientWeight'] * 1000 / hdr_pet['RadionuclideTotalDose']
-            auc_suv = np.trapz(idif_suv[suvframes], x=MidFrameTime[suvframes])
-            peak_suv = np.amax(idif_suv) # Peak value is found within the entire duration
-            slope_suv = np.amax(np.diff(idif_suv[suvframes]))
-
-            writer.writerow([method,hdr_pet['Radiopharmaceutical'],hdr_pet['PatientWeight'],hdr_pet['RadionuclideTotalDose'],seg+1,segments[seg],'SUV',auc_suv,peak_suv,slope_suv])
-
-
-
-    plt.close()  
