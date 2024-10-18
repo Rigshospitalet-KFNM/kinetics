@@ -88,7 +88,11 @@ def handle_multiple_clusters(mask, labeled_mask, number_of_clusters):
 
 def aorta_segment(aorta_mask: numpy.ndarray[Tuple[int,int,int], numpy.bool_]):
      # Get image dimensions
+    (z_min, z_max),(y_min, y_max),(x_min, x_max) = bounding_box(aorta_mask)
+
+
     number_of_slices,_ , _ = aorta_mask.shape
+
 
     # Allocate aortamask_segmented
     aorta_mask_segmented = aorta_mask.astype(int)
@@ -167,16 +171,19 @@ def processing(rt_struct: RTStruct, dynamic_pet_series: LargeDynamicPetSeries):
 
   segments_names = ['Aorta asc', 'Aortic arch', 'Aorta desc (upper)', 'Aorta desc (lower)']
   segments = len(segments_names)
+  aorta_asc_id, aortic_arch_id, aorta_desc_upper_id, aorta_desc_lower = [
+    i for i in range(segments)
+  ]
   aorta_mask_segmented = aorta_segment(aorta_mask)
 
-  (z_min, z_max),(y_min, y_max),(x_min, x_max) = bounding_box(aorta_mask_segmented)
   threshold = 1000 // numpy.prod(dynamic_pet_series.pixel_volume)
 
   number_of_slices = dynamic_pet_series.NumberOfSlices
   volume_of_interest = numpy.zeros((segments,
                                     number_of_slices,
                                     dynamic_pet_series.Rows,
-                                    dynamic_pet_series.Cols), dtype=numpy.bool_)
+                                    dynamic_pet_series.Cols),
+                                    dtype=numpy.bool_)
 
   input_derived_image_function = numpy.zeros((number_of_slices, segments))
 
@@ -187,12 +194,14 @@ def processing(rt_struct: RTStruct, dynamic_pet_series: LargeDynamicPetSeries):
 
   for segment_index in range(segments):
     segment_id = segment_index + 1
-    if segment_index != 1:
-      slice_median = numpy.zeros(number_of_slices)
+    aorta_mask_sub_segmented = aorta_mask_segmented == segment_id
+    suv_segment = suv * (aorta_mask_sub_segmented)
+
+    if segment_index != aortic_arch_id:
+      slice_median = numpy.zeros((number_of_slices))
       for slice_ in range(number_of_slices):
-        if numpy.sum(aorta_mask_segmented[slice_,:,:] == segment_id):
-           SUV_segment = suv[slice_,:,:]*(aorta_mask_segmented[slice_:,:]== segment_id)
-          slice_median[slice_] = numpy.median(SUV_segment[SUV_segment>0])
+        suv_slice_segment = suv_segment[slice_,:,:]
+        slice_median[slice_] = numpy.median(suv_slice_segment[suv_slice_segment>0])
 
       # Sliding window average of slice profile
       middle_slice = numpy.argmax(
@@ -201,9 +210,34 @@ def processing(rt_struct: RTStruct, dynamic_pet_series: LargeDynamicPetSeries):
 
       # Position 3x3xN VOI within segment with detected center slice
       for slice_ in range(middle_slice-N//2,middle_slice+N//2):
-          if numpy.sum(aorta_mask_segmented[slice_,:,:] == segment_id):
-              x0,y0 = center_of_gravity(suv[slice_,:,:]*(aorta_mask_segmented[slice_,:,:] == segment_id))
-              volume_of_interest[segment_index,slice_,y0-1:y0+2,x0-1:x0+2] = 1
+        suv_slice_segment: numpy.ndarray = suv_segment[slice_,:,:]
+        if suv_slice_segment.any():
+          x0,y0 = center_of_gravity(suv_slice_segment)
+          volume_of_interest[segment_index, slice_, y0-1:y0+2, x0-1:x0+2] = 1
+    else:
+      prc = 99.99
+      volume = 0
+
+      while volume <= threshold:
+        volume_of_interest[segment_index,:,:,:] = suv_segment >= numpy.percentile(suv[aorta_mask_sub_segmented],prc)
+        label_img, n_clusters = label(volume_of_interest[segment_index,:,:,:], return_num=True)
+
+        cluster_size = numpy.zeros((n_clusters,))
+
+        for cluster in range(n_clusters):
+          cluster_size[cluster] = numpy.sum(label_img==cluster+1)
+
+        # Find largest cluster
+        max_cluster_index = numpy.argmax(cluster_size)+1
+        volume_of_interest[segment_index, :,:,:] = label_img==max_cluster_index
+
+        volume = cluster_size[max_cluster_index-1]
+        prc -= 0.5
+
+    input_derived_image_function[segment_index,:] = numpy.mean(
+      dynamic_pet_series.raw[numpy.squeeze(volume_of_interest[segment_index,:,:,:])],
+      axis=0
+    )
 
 
 #region Inputs
