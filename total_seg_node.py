@@ -25,46 +25,45 @@ from dicomnode.server.output import DicomOutput, NoOutput
 # God fucking dammit
 tqdm.tqdm.monitor_interval = 0
 
-
 # Constants Setup
 INPUT_KEY = "CT_IMAGES"
 
 # Environment setup
-ENV_NAME_NODE_PATH = "TOTAL_SEGMENTATOR_PATH"
-node_path = Path(os.environ.get(ENV_NAME_NODE_PATH, os.getcwd() + "/total_segmentator_node"))
-output_path = Path(os.getcwd()) / "outputs"
+TOTAL_SEG_ENV_PORT = "TOTAL_SEG_ENV_PORT"
+TOTAL_SEG_ENV_AE_TITLE = "TOTAL_SEG_ENV_AE_TITLE"
+TOTAL_SEG_ENV_INPUT = "TOTAL_SEG_ENV_INPUT"
+TOTAL_SEG_ENV_OUTPUT = "TOTAL_SEG_ENV_OUTPUT"
 
-def SIGUSR1_handler(signum, frane):
-  for thread in threading.enumerate():
-    print(thread._target)
-    if thread._target is not None:
-      print(inspect.getsourcelines(thread._target))
+input_node_path = Path(os.environ.get(TOTAL_SEG_ENV_INPUT, os.getcwd() + '/inputs'))
+#output_node_path = Path(os.environ.get(TOTAL_SEG_ENV_OUTPUT, os.getcwd() + '/output'))
 
-signal.signal(signal.SIGUSR1, SIGUSR1_handler)
+node_port = int(os.environ.get(TOTAL_SEG_ENV_PORT, 42069))
+node_ae_title = os.environ.get(TOTAL_SEG_ENV_AE_TITLE, "TOTALSEG")
 
 class TotalSegmentatorInput(AbstractInput):
   image_grinder = IdentityGrinder()
 
   required_tags = [
-    0x00200013
+    0x0020_0013
   ]
 
   required_values = {
-    0x00080016 : CTImageStorage,
-    0x00080060 : 'CT',
+    0x0008_0016 : CTImageStorage,
+    0x0008_0060 : 'CT',
   }
 
   def validate(self) -> bool:
     if self.images == 0:
       return False
 
+    max_instance_number = -1
+
     for image in self:
-      if self.images < image.InstanceNumber:
-        return False
+      max_instance_number = max(max_instance_number, image.InstanceNumber)
 
-    return True
+    return max_instance_number - 1 == self.images
 
-destination_address = Address('10.146.12.194', 11112, "KINETICDIAMOX")
+destination_address = Address('172.16.82.175', 11112, "KINETICDIAMOX")
 
 
 class TotalSegmentatorPipeline(AbstractQueuedPipeline):
@@ -72,16 +71,29 @@ class TotalSegmentatorPipeline(AbstractQueuedPipeline):
     INPUT_KEY : TotalSegmentatorInput
   }
 
-  ae_title = "TOTALSEG"
-  data_directory = node_path
-  port = 11113
+  ae_title = node_ae_title
+  data_directory = input_node_path
+  port = node_port
 
   def process(self, input_data: InputContainer) -> PipelineOutput:
     if input_data.paths is None:
       raise Exception("This can never happen!")
 
+    destination = None
+
+    for source_dataset in input_data.datasets.values():
+      if 0x1337_0101 in source_dataset and 0x1337_0102 in source_dataset and 0x1337_0103:
+        destination = Address(
+          source_dataset[0x1337_0101].value,
+          source_dataset[0x1337_0102].value,
+          source_dataset[0x1337_0103].value,
+        )
+      break
+    if destination is None:
+        destination = destination_address
+
     input_path = input_data.paths[INPUT_KEY]
-    #output_path = input_path.parent / "output"
+    output_path = input_path.parent / "output"
 
     totalsegmentator(input_path,
                      output_path,
@@ -93,8 +105,10 @@ class TotalSegmentatorPipeline(AbstractQueuedPipeline):
     )
 
     output_dataset = read_file(output_path / "segmentations.dcm")
-    return NoOutput()
-    #return DicomOutput([(destination_address, output_dataset)],self.ae_title)
+
+    self.logger.info(f"Sending segmentation to {destination.ae_title} ({destination.ip}:{destination.port})")
+
+    return DicomOutput([(destination, [output_dataset])],self.ae_title)
 
 
 if __name__ == "__main__":
